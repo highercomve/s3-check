@@ -3,7 +3,6 @@ package lib
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -11,6 +10,19 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+type ObjectsQuery struct {
+	Ctx    context.Context
+	Col    *mongo.Collection
+	Limit  int64
+	Filter bson.M
+	Pages  int64
+}
+
+type ObjectQuery struct {
+	*ObjectsQuery
+	Page int64
+}
 
 func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	var key string
@@ -76,7 +88,12 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 
 	pages := count / limit
 
-	err = getObjects(ctx, col, limit, pages, filter)
+	err = getObjects(&ObjectsQuery{
+		Ctx:   ctx,
+		Pages: pages,
+		Limit: limit,
+		Col:   col,
+	})
 	if err != nil {
 		return err
 	}
@@ -84,20 +101,14 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	return nil
 }
 
-func getObjects(
-	ctx context.Context,
-	col *mongo.Collection,
-	limit,
-	pages int64,
-	filter bson.M,
-) (err error) {
-	var wg sync.WaitGroup
-
-	wg.Add(int(pages))
-
-	for i := int64(0); i <= pages; i++ {
-		err = getPage(ctx, col, filter, limit, i)
-		if err != nil {
+func getObjects(query *ObjectsQuery) (err error) {
+	for i := int64(0); i <= query.Pages; i++ {
+		page := i
+		query := &ObjectQuery{
+			ObjectsQuery: query,
+			Page:         page,
+		}
+		if err = getPage(query); err != nil {
 			return err
 		}
 	}
@@ -105,28 +116,23 @@ func getObjects(
 	return err
 }
 
-func getPage(
-	ctx context.Context,
-	col *mongo.Collection,
-	filter bson.M,
-	limit,
-	page int64,
-) (err error) {
+func getPage(query *ObjectQuery) (err error) {
 	options := &options.FindOptions{}
-	options.SetLimit(limit)
-	options.SetSkip(page * limit)
-	cursor, err := col.Find(ctx, filter, options)
+	options.SetLimit(query.Limit)
+	options.SetSkip(query.Page * query.Limit)
+
+	cursor, err := query.Col.Find(query.Ctx, query.Filter, options)
 	if err != nil {
 		return err
 	}
 
-	for cursor.Next(ctx) {
+	for cursor.Next(query.Ctx) {
 		object := bson.M{}
 		if err = cursor.Decode(&object); err != nil {
 			return err
 		}
 
-		fmt.Printf("Page %d \n", page+1)
+		fmt.Printf("Page %d \n", query.Page+1)
 		fmt.Printf("%+v \n", object)
 	}
 
