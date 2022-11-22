@@ -2,7 +2,7 @@ package lib
 
 import (
 	"context"
-	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -38,31 +38,45 @@ func NewS3Connect(ctxP context.Context, params *S3ConnParams) (client *S3Client,
 		return nil, err
 	}
 
-	c := s3.NewFromConfig(
-		cnf,
-		func(opts *s3.Options) {
-			opts.UsePathStyle = true
-		},
-	)
+	s3Client := &S3Client{bucket: params.Bucket}
+	if params.Endpoint != "" {
+		s3Client.client = s3.NewFromConfig(
+			cnf,
+			s3.WithEndpointResolver(
+				s3.EndpointResolverFromURL(params.Endpoint),
+			),
+			func(opts *s3.Options) {
+				opts.UsePathStyle = true
+			},
+		)
+	} else {
+		s3Client.client = s3.NewFromConfig(
+			cnf,
+			func(opts *s3.Options) {
+				opts.UsePathStyle = true
+			},
+		)
+	}
 
-	return &S3Client{client: c, bucket: params.Bucket}, err
+	return s3Client, err
 }
 
 func (s *S3Client) ObjectExist(ctx context.Context, id string) (exist bool, err error) {
 	var obj *s3.HeadObjectOutput
+	exist = false
+
 	obj, err = s.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.bucket,
 		Key:    &id,
 	})
+	if err != nil && strings.Contains(err.Error(), "404") {
+		return false, nil
+	}
 	if err != nil {
 		return
 	}
 
-	fmt.Printf("%+v", obj)
-
 	if obj != nil {
-		exist = false
-	} else {
 		exist = true
 	}
 

@@ -2,8 +2,10 @@ package lib
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/bson"
@@ -25,8 +27,12 @@ type ObjectQuery struct {
 	Page int64
 }
 
+type ObjectData struct {
+	ID string `json:"id" bson:"_id"`
+}
+
 type ObjectResult struct {
-	Data bson.M
+	Data ObjectData
 	Err  error
 }
 
@@ -108,48 +114,20 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	return nil
 }
 
-func SearchS3(ctx context.Context, s3params *S3ConnParams, s SearcherChannel, w WriterChannel) {
-	s3, err := NewS3Connect(ctx, s3params)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for r := range s {
-		fmt.Printf("%+v \n", r)
-		if r.Err != nil {
-			return
-		}
-
-		id, ok := r.Data["id"]
-		if !ok {
-			return
-		}
-		exist, err := s3.ObjectExist(ctx, id.(string))
-		if err != nil {
-			return
-		}
-		if !exist {
-			w <- r
-		}
-	}
-}
-
-func Writter(ctx context.Context, writer WriterChannel) {
-	for r := range writer {
-		fmt.Printf("%+v \n", r)
-	}
-}
-
 func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 	query.Pages = query.Count / query.Limit
 	reader := make(ReaderChannel)
 	writter := make(WriterChannel)
 	searcher := make(SearcherChannel)
+	errs := make(chan string)
 
-	// go SearchS3(ctx, query.S3Params, searcher, writter)
-	// go Writter(ctx, writter)
+	go func() {
+		searchS3(ctx, query.S3Params, searcher, writter, errs)
+	}()
+	go func() {
+		writeResult(ctx, writter, errs)
+	}()
 
-	fmt.Printf("here")
 	for i := int64(0); i <= query.Pages; i++ {
 		query := ObjectQuery{
 			ObjectsQuery: query,
@@ -157,51 +135,117 @@ func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 		}
 
 		go func(ctx context.Context) {
-			fmt.Printf("%+v \n", query.ObjectsQuery)
-			err := getPage(ctx, &query, reader)
+			defer func() {
+				if r := recover(); r != nil {
+					return
+				}
+			}()
+			err = getPage(ctx, &query, reader, errs)
 			if err != nil {
-				close(reader)
-				close(writter)
-				close(searcher)
+				log.Fatal(err)
 			}
 		}(ctx)
 	}
 
 	results := 0
-	for r := range reader {
-		fmt.Printf("%v", r)
-		results++
-		searcher <- r
-		if r.Err != nil || results >= int(query.Count) {
-			break
+loop:
+	for {
+		select {
+		case e, open := <-errs:
+			if !open {
+				break loop
+			}
+			err = fmt.Errorf(e)
+			break loop
+		case r, open := <-reader:
+			if !open {
+				break loop
+			}
+			results++
+			searcher <- r
+
+			if results >= int(query.Count) {
+				break loop
+			}
 		}
 	}
 
 	close(reader)
 	close(writter)
 	close(searcher)
+	close(errs)
 
-	return err
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return nil
 }
 
-func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel) error {
+func searchS3(
+	ctx context.Context,
+	s3params *S3ConnParams,
+	s SearcherChannel,
+	w WriterChannel,
+	errs chan string,
+) {
+	s3, err := NewS3Connect(ctx, s3params)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		select {
+		case r, open := <-s:
+			if !open {
+				return
+			}
+
+			exist, err := s3.ObjectExist(ctx, r.Data.ID)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			if !exist {
+				w <- r
+			}
+		}
+	}
+}
+
+func writeResult(ctx context.Context, writer WriterChannel, errs chan string) {
+	for {
+		select {
+		case w, open := <-writer:
+			if !open {
+				return
+			}
+
+			data, err := json.Marshal(w.Data)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Fprintf(os.Stdout, "%s \n", data)
+		}
+	}
+}
+
+func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel, errs chan string) error {
 	options := &options.FindOptions{}
 	options.SetLimit(query.Limit)
 	options.SetSkip(query.Page * query.Limit)
 
-	fmt.Printf("%+v \n", query.ObjectsQuery)
 	cursor, err := query.Col.Find(ctx, query.Filter, options)
 	if err != nil {
-		result := ObjectResult{Err: err}
-		r <- result
+		log.Fatal(err)
 	}
 
-	for cursor.Next(context.TODO()) {
+	for cursor.Next(ctx) {
 		result := ObjectResult{}
-		object := bson.M{}
+		object := ObjectData{}
 		if err = cursor.Decode(&object); err != nil {
-			result.Err = err
-			r <- result
+			log.Fatal(err)
 		}
 		result.Data = object
 		r <- result
