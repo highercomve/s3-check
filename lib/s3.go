@@ -2,6 +2,8 @@ package lib
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -18,18 +20,18 @@ type S3ConnParams struct {
 
 type S3Client struct {
 	client *s3.Client
+	bucket string
 }
 
-func NewS3Connect(ctx context.Context, params *S3ConnParams) (client *S3Client, err error) {
+func NewS3Connect(ctxP context.Context, params *S3ConnParams) (client *S3Client, err error) {
+	ctx, cancel := context.WithTimeout(ctxP, 10*time.Second)
+	defer cancel()
+
 	credentials := credentials.NewStaticCredentialsProvider(params.Key, params.Secret, "")
 
-	// Obtaining the S3 SDK client configuration based on the passed parameters.
 	cnf, err := config.LoadDefaultConfig(
 		ctx,
 		config.WithCredentialsProvider(credentials),
-		// Zerops supports only the S3 default region for API calls.
-		// It doesn't mean that the physical HW infrastructure is located there also.
-		// All Zerops infrastructure is completely located in Europe/Prague.
 		config.WithRegion(params.Region),
 	)
 	if err != nil {
@@ -37,18 +39,32 @@ func NewS3Connect(ctx context.Context, params *S3ConnParams) (client *S3Client, 
 	}
 
 	c := s3.NewFromConfig(
-		// Passing the S3 SDK client configuration created before.
 		cnf,
-		s3.WithEndpointResolver(
-			// Applying of the Zerops Object Storage API URL endpoint.
-			s3.EndpointResolverFromURL(params.Endpoint),
-		),
 		func(opts *s3.Options) {
-			// Zerops supports currently only S3 path-style addressing model.
-			// The virtual-hosted style model will be supported in near future.
 			opts.UsePathStyle = true
 		},
 	)
 
-	return &S3Client{client: c}, err
+	return &S3Client{client: c, bucket: params.Bucket}, err
+}
+
+func (s *S3Client) ObjectExist(ctx context.Context, id string) (exist bool, err error) {
+	var obj *s3.HeadObjectOutput
+	obj, err = s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &s.bucket,
+		Key:    &id,
+	})
+	if err != nil {
+		return
+	}
+
+	fmt.Printf("%+v", obj)
+
+	if obj != nil {
+		exist = false
+	} else {
+		exist = true
+	}
+
+	return exist, err
 }

@@ -2,7 +2,8 @@ package lib
 
 import (
 	"context"
-	"time"
+	"fmt"
+	"log"
 
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/bson"
@@ -11,13 +12,12 @@ import (
 )
 
 type ObjectsQuery struct {
-	Ctx    context.Context
-	Col    *mongo.Collection
-	S3     *S3Client
-	Limit  int64
-	Filter bson.M
-	Pages  int64
-	Count  int64
+	Col      *mongo.Collection
+	S3Params *S3ConnParams
+	Limit    int64
+	Filter   bson.M
+	Pages    int64
+	Count    int64
 }
 
 type ObjectQuery struct {
@@ -25,17 +25,14 @@ type ObjectQuery struct {
 	Page int64
 }
 
-type QueryResult struct {
-	Data   bson.M
-	Filter bson.M
-	Limit  int64
-	Pages  int64
-	Page   int64
-	Count  int64
-	Index  int64
-	Err    error
+type ObjectResult struct {
+	Data bson.M
+	Err  error
 }
-type RChan chan QueryResult
+
+type ReaderChannel chan ObjectResult
+type WriterChannel chan ObjectResult
+type SearcherChannel chan ObjectResult
 
 func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	var key string
@@ -72,7 +69,7 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	storage, err := NewDbConnection(ctx, connection)
@@ -92,22 +89,17 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 		Bucket:   bucket,
 		Endpoint: endpoint,
 	}
-	s3, err := NewS3Connect(ctx, s3params)
-	if err != nil {
-		return err
-	}
 
 	count, err := col.CountDocuments(ctx, filter)
 	if err != nil {
 		return err
 	}
 
-	err = getObjects(&ObjectsQuery{
-		Ctx:   ctx,
-		Count: count,
-		Limit: limit,
-		Col:   col,
-		S3:    s3,
+	err = getMissingObjects(ctx, &ObjectsQuery{
+		Count:    count,
+		Limit:    limit,
+		Col:      col,
+		S3Params: s3params,
 	})
 	if err != nil {
 		return err
@@ -116,60 +108,96 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	return nil
 }
 
-func getObjects(query *ObjectsQuery) (err error) {
-	query.Pages = query.Count / query.Limit
-	resultC := make(RChan)
+func SearchS3(ctx context.Context, s3params *S3ConnParams, s SearcherChannel, w WriterChannel) {
+	s3, err := NewS3Connect(ctx, s3params)
+	if err != nil {
+		log.Fatal(err)
+	}
 
+	for r := range s {
+		fmt.Printf("%+v \n", r)
+		if r.Err != nil {
+			return
+		}
+
+		id, ok := r.Data["id"]
+		if !ok {
+			return
+		}
+		exist, err := s3.ObjectExist(ctx, id.(string))
+		if err != nil {
+			return
+		}
+		if !exist {
+			w <- r
+		}
+	}
+}
+
+func Writter(ctx context.Context, writer WriterChannel) {
+	for r := range writer {
+		fmt.Printf("%+v \n", r)
+	}
+}
+
+func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
+	query.Pages = query.Count / query.Limit
+	reader := make(ReaderChannel)
+	writter := make(WriterChannel)
+	searcher := make(SearcherChannel)
+
+	// go SearchS3(ctx, query.S3Params, searcher, writter)
+	// go Writter(ctx, writter)
+
+	fmt.Printf("here")
 	for i := int64(0); i <= query.Pages; i++ {
 		query := ObjectQuery{
 			ObjectsQuery: query,
 			Page:         i,
 		}
 
-		go func() {
-			err := getPage(&query, resultC)
+		go func(ctx context.Context) {
+			fmt.Printf("%+v \n", query.ObjectsQuery)
+			err := getPage(ctx, &query, reader)
 			if err != nil {
-				close(resultC)
+				close(reader)
+				close(writter)
+				close(searcher)
 			}
-		}()
+		}(ctx)
 	}
 
-	results := bson.A{}
-	for r := range resultC {
-		if r.Err != nil {
-			close(resultC)
-			err = r.Err
-			break
-		}
-
-		results = append(results, r.Data)
-		if len(results) == int(query.Count) {
-			close(resultC)
+	results := 0
+	for r := range reader {
+		fmt.Printf("%v", r)
+		results++
+		searcher <- r
+		if r.Err != nil || results >= int(query.Count) {
 			break
 		}
 	}
+
+	close(reader)
+	close(writter)
+	close(searcher)
 
 	return err
 }
 
-func getPage(query *ObjectQuery, r RChan) error {
+func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel) error {
 	options := &options.FindOptions{}
 	options.SetLimit(query.Limit)
 	options.SetSkip(query.Page * query.Limit)
 
-	cursor, err := query.Col.Find(query.Ctx, query.Filter, options)
+	fmt.Printf("%+v \n", query.ObjectsQuery)
+	cursor, err := query.Col.Find(ctx, query.Filter, options)
 	if err != nil {
-		result := QueryResult{Err: err}
+		result := ObjectResult{Err: err}
 		r <- result
 	}
 
-	for cursor.Next(query.Ctx) {
-		result := QueryResult{
-			Page:  query.Page,
-			Pages: query.Pages,
-			Limit: query.Limit,
-			Count: query.Count,
-		}
+	for cursor.Next(context.TODO()) {
+		result := ObjectResult{}
 		object := bson.M{}
 		if err = cursor.Decode(&object); err != nil {
 			result.Err = err

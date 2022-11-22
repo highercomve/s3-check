@@ -56,7 +56,10 @@ func NewDbConnection(ctx context.Context, url string) (*DbConnection, error) {
 }
 
 // GetMongoClient : To Get Mongo Client Object
-func GetMongoClient(ctx context.Context, url string) (*mongo.Client, error) {
+func GetMongoClient(ctxP context.Context, url string) (*mongo.Client, error) {
+	ctx, cancel := context.WithTimeout(ctxP, 10*time.Second)
+	defer cancel()
+
 	client, err := mongo.NewClient(options.Client().ApplyURI(url))
 	if err != nil {
 		return nil, err
