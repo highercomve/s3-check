@@ -2,7 +2,6 @@ package lib
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,15 +13,29 @@ import (
 type ObjectsQuery struct {
 	Ctx    context.Context
 	Col    *mongo.Collection
+	S3     *S3Client
 	Limit  int64
 	Filter bson.M
 	Pages  int64
+	Count  int64
 }
 
 type ObjectQuery struct {
 	*ObjectsQuery
 	Page int64
 }
+
+type QueryResult struct {
+	Data   bson.M
+	Filter bson.M
+	Limit  int64
+	Pages  int64
+	Page   int64
+	Count  int64
+	Index  int64
+	Err    error
+}
+type RChan chan QueryResult
 
 func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	var key string
@@ -59,19 +72,10 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	fmt.Println(key)
-	fmt.Println(secret)
-	fmt.Println(region)
-	fmt.Println(bucket)
-	fmt.Println(endpoint)
-	fmt.Println(connection)
-	fmt.Println(database)
-	fmt.Println(collection)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	storage, err := NewStorage(ctx, connection)
+	storage, err := NewDbConnection(ctx, connection)
 	if err != nil {
 		return err
 	}
@@ -81,18 +85,29 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	db := storage.GetDatabase(database)
 	col := db.Collection(collection)
 
+	s3params := &S3ConnParams{
+		Key:      key,
+		Secret:   secret,
+		Region:   region,
+		Bucket:   bucket,
+		Endpoint: endpoint,
+	}
+	s3, err := NewS3Connect(ctx, s3params)
+	if err != nil {
+		return err
+	}
+
 	count, err := col.CountDocuments(ctx, filter)
 	if err != nil {
 		return err
 	}
 
-	pages := count / limit
-
 	err = getObjects(&ObjectsQuery{
 		Ctx:   ctx,
-		Pages: pages,
+		Count: count,
 		Limit: limit,
 		Col:   col,
+		S3:    s3,
 	})
 	if err != nil {
 		return err
@@ -102,38 +117,66 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 }
 
 func getObjects(query *ObjectsQuery) (err error) {
+	query.Pages = query.Count / query.Limit
+	resultC := make(RChan)
+
 	for i := int64(0); i <= query.Pages; i++ {
-		page := i
-		query := &ObjectQuery{
+		query := ObjectQuery{
 			ObjectsQuery: query,
-			Page:         page,
+			Page:         i,
 		}
-		if err = getPage(query); err != nil {
-			return err
+
+		go func() {
+			err := getPage(&query, resultC)
+			if err != nil {
+				close(resultC)
+			}
+		}()
+	}
+
+	results := bson.A{}
+	for r := range resultC {
+		if r.Err != nil {
+			close(resultC)
+			err = r.Err
+			break
+		}
+
+		results = append(results, r.Data)
+		if len(results) == int(query.Count) {
+			close(resultC)
+			break
 		}
 	}
 
 	return err
 }
 
-func getPage(query *ObjectQuery) (err error) {
+func getPage(query *ObjectQuery, r RChan) error {
 	options := &options.FindOptions{}
 	options.SetLimit(query.Limit)
 	options.SetSkip(query.Page * query.Limit)
 
 	cursor, err := query.Col.Find(query.Ctx, query.Filter, options)
 	if err != nil {
-		return err
+		result := QueryResult{Err: err}
+		r <- result
 	}
 
 	for cursor.Next(query.Ctx) {
+		result := QueryResult{
+			Page:  query.Page,
+			Pages: query.Pages,
+			Limit: query.Limit,
+			Count: query.Count,
+		}
 		object := bson.M{}
 		if err = cursor.Decode(&object); err != nil {
-			return err
+			result.Err = err
+			r <- result
 		}
-
-		fmt.Printf("Page %d \n", query.Page+1)
-		fmt.Printf("%+v \n", object)
+		result.Data = object
+		r <- result
 	}
 
 	return err

@@ -10,11 +10,11 @@ import (
 )
 
 var (
-	storage Storage
+	storage DbConnection
 )
 
-// Storage define all storage action and methods
-type Storage struct {
+// DbConnection define all storage action and methods
+type DbConnection struct {
 	Database        string
 	client          *mongo.Client
 	timeoutDuration time.Duration
@@ -38,7 +38,7 @@ func IsDuplicateKey(key string, err error) bool {
 }
 
 // New create new Storage Struct
-func NewStorage(ctx context.Context, url string) (*Storage, error) {
+func NewDbConnection(ctx context.Context, url string) (*DbConnection, error) {
 	if storage.client != nil {
 		return &storage, nil
 	}
@@ -48,7 +48,7 @@ func NewStorage(ctx context.Context, url string) (*Storage, error) {
 		return nil, err
 	}
 
-	storage = Storage{
+	storage = DbConnection{
 		client:          client,
 		timeoutDuration: 30 * time.Minute,
 	}
@@ -69,19 +69,19 @@ func GetMongoClient(ctx context.Context, url string) (*mongo.Client, error) {
 	return client, err
 }
 
-func (s *Storage) GetDatabase(name string) *mongo.Database {
+func (s *DbConnection) GetDatabase(name string) *mongo.Database {
 	s.Database = name
 	return s.client.Database(name)
 }
 
-func (s *Storage) GetCollection(name string) *mongo.Collection {
+func (s *DbConnection) GetCollection(name string) *mongo.Collection {
 	return s.client.Database(s.Database).Collection(name)
 }
 
-func (s *Storage) Disconnect(ctx context.Context) error {
+func (s *DbConnection) Disconnect(ctx context.Context) error {
 	return s.client.Disconnect(ctx)
 }
 
-func (s *Storage) Connect(ctx context.Context) error {
+func (s *DbConnection) Connect(ctx context.Context) error {
 	return s.client.Connect(ctx)
 }
