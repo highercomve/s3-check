@@ -189,14 +189,20 @@ func searchS3(
 	}
 
 	for resp := range reader {
-		go func(r ObjectResult) {
-			r.Data.Exist, err = s3.ObjectExist(ctx, r.Data.ID)
+		go func(response ObjectResult) {
+			defer func() {
+				if r := recover(); r != nil {
+					return
+				}
+			}()
+
+			response.Data.Exist, err = s3.ObjectExist(ctx, response.Data.ID)
 			if err != nil {
 				errs <- err
 				return
 			}
 
-			writter <- r
+			writter <- response
 		}(resp)
 	}
 }
