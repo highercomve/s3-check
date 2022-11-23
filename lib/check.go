@@ -124,7 +124,7 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 
 func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 	query.Pages = query.Count / query.Limit
-	channelSize := query.Count - 1
+	channelSize := query.Count
 	reader := make(ReaderChannel)
 	writter := make(WriterChannel)
 	result := make(ErrorChannel)
@@ -160,7 +160,7 @@ func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 			break
 		}
 
-		if results > int(channelSize) {
+		if results >= int(channelSize) {
 			break
 		}
 	}
@@ -205,7 +205,7 @@ func writeResult(
 	ctx context.Context,
 	size int64,
 	writer WriterChannel,
-	errs ErrorChannel,
+	results ErrorChannel,
 	quit chan bool,
 ) {
 	missing := 0
@@ -232,7 +232,7 @@ writeLoop:
 		case result := <-writer:
 			total++
 			if result.Data.Exist && !config.PrintAll {
-				errs <- nil
+				results <- nil
 				continue
 			}
 
@@ -242,16 +242,21 @@ writeLoop:
 
 			data, err := json.Marshal(result.Data)
 			if err != nil {
-				errs <- err
+				results <- err
 				continue
 			}
 
 			separator := ","
-			if int64(total) >= size {
+			if total >= int(size)-1 {
 				separator = ""
 			}
-			fmt.Fprintf(output, "%s%s%s%s", spacer+spacer, data, separator, endline)
-			errs <- nil
+
+			if _, err = fmt.Fprintf(output, "%s%s%s%s", spacer+spacer, data, separator, endline); err != nil {
+				results <- err
+				continue
+			}
+
+			results <- nil
 		case <-quit:
 			break writeLoop
 		}
