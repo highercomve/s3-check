@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/pprof"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -63,6 +64,17 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	collection := viper.GetString("collection")
 	connection := viper.GetString("connection")
 	printall := viper.GetBool("printall")
+	limit := viper.GetInt64("limit")
+	cpuprofile := viper.GetString("cpuprofile")
+
+	if cpuprofile != "" {
+		f, err := os.Create(cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	parent := context.WithValue(
 		context.Background(),
@@ -76,7 +88,6 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	limit := int64(5)
 	filter := bson.M{"sizeint": bson.M{"$gt": 0}}
 	db := storage.GetDatabase(database)
 	col := db.Collection(collection)
@@ -110,17 +121,13 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 	query.Pages = query.Count / query.Limit
 	channelSize := query.Count - 1
-	reader := make(ReaderChannel, channelSize)
-	writter := make(WriterChannel, channelSize)
-	result := make(ErrorChannel, channelSize)
+	reader := make(ReaderChannel)
+	writter := make(WriterChannel)
+	result := make(ErrorChannel)
 	quit := make(chan bool)
 
-	go func() {
-		searchS3(ctx, query.S3Params, reader, writter, result)
-	}()
-	go func() {
-		writeResult(ctx, writter, result, quit)
-	}()
+	go searchS3(ctx, query.S3Params, reader, writter, result)
+	go writeResult(ctx, writter, result, quit)
 
 	for i := int64(0); i <= query.Pages; i++ {
 		query := ObjectQuery{
@@ -168,8 +175,8 @@ func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 func searchS3(
 	ctx context.Context,
 	s3params *S3ConnParams,
-	s ReaderChannel,
-	w WriterChannel,
+	reader ReaderChannel,
+	writter WriterChannel,
 	errs ErrorChannel,
 ) {
 	s3, err := NewS3Connect(ctx, s3params)
@@ -177,7 +184,7 @@ func searchS3(
 		errs <- err
 	}
 
-	for r := range s {
+	for resp := range reader {
 		go func(r ObjectResult) {
 			r.Data.Exist, err = s3.ObjectExist(ctx, r.Data.ID)
 			if err != nil {
@@ -185,35 +192,39 @@ func searchS3(
 				return
 			}
 
-			w <- r
-		}(r)
+			writter <- r
+		}(resp)
 	}
 }
 
-func writeResult(ctx context.Context, writer WriterChannel, errs ErrorChannel, quit chan bool) {
+func writeResult(
+	ctx context.Context,
+	writer WriterChannel,
+	errs ErrorChannel,
+	quit chan bool,
+) {
 	missing := 0
 	total := 0
 	buf := new(bytes.Buffer)
 	config := ctx.Value(ctxConfig).(Config)
 
-	fmt.Fprintf(buf, "{")
-	fmt.Fprintf(buf, "\"elements\": [")
+	fmt.Fprintf(buf, "{\"elements\": [")
 
 writeLoop:
 	for {
 		select {
-		case w := <-writer:
+		case result := <-writer:
 			total++
-			if w.Data.Exist && !config.PrintAll {
+			if result.Data.Exist && !config.PrintAll {
 				errs <- nil
 				continue
 			}
 
-			if !w.Data.Exist {
+			if !result.Data.Exist {
 				missing++
 			}
 
-			data, err := json.Marshal(w.Data)
+			data, err := json.Marshal(result.Data)
 			if err != nil {
 				errs <- err
 				continue

@@ -38,6 +38,8 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.cobra.yaml)")
+	rootCmd.PersistentFlags().String("cpuprofile", "", "CPU profiling")
+	rootCmd.Flags().Int64P("limit", "l", 100, "Request limit")
 	rootCmd.Flags().StringP("key", "k", "", "s3 ACCESS_KEY")
 	rootCmd.Flags().StringP("secret", "s", "", "s3 SECRET")
 	rootCmd.Flags().StringP("region", "r", "", "s3 REGION")
@@ -75,8 +77,5 @@ func initConfig() {
 	}
 
 	viper.AutomaticEnv()
-
-	if err := viper.ReadInConfig(); err != nil {
-		cobra.CheckErr(err)
-	}
+	viper.ReadInConfig()
 }
