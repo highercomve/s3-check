@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+type contextConfig string
 
 type ObjectsQuery struct {
 	Col      *mongo.Collection
@@ -28,7 +31,8 @@ type ObjectQuery struct {
 }
 
 type ObjectData struct {
-	ID string `json:"id" bson:"_id"`
+	ID    string `json:"id" bson:"_id"`
+	Exist bool   `json:"exist" bson:"exist"`
 }
 
 type ObjectResult struct {
@@ -36,9 +40,17 @@ type ObjectResult struct {
 	Err  error
 }
 
+type Config struct {
+	PrintAll bool
+}
+
 type ReaderChannel chan ObjectResult
 type WriterChannel chan ObjectResult
-type SearcherChannel chan ObjectResult
+type ErrorChannel chan error
+
+const (
+	ctxConfig = contextConfig("config")
+)
 
 func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	var key string
@@ -49,8 +61,9 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	var connection string
 	var database string
 	var collection string
+	var printall bool
 
-	if key, err = cmd.Flags().GetString("access_key"); err != nil {
+	if key, err = cmd.Flags().GetString("key"); err != nil {
 		return err
 	}
 	if secret, err = cmd.Flags().GetString("secret"); err != nil {
@@ -74,8 +87,15 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	if connection, err = cmd.Flags().GetString("connection"); err != nil {
 		return err
 	}
+	if printall, err = cmd.Flags().GetBool("printall"); err != nil {
+		return err
+	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	parent := context.WithValue(
+		context.Background(),
+		ctxConfig,
+		Config{PrintAll: printall})
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	storage, err := NewDbConnection(ctx, connection)
@@ -116,16 +136,17 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 
 func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 	query.Pages = query.Count / query.Limit
-	reader := make(ReaderChannel)
-	writter := make(WriterChannel)
-	searcher := make(SearcherChannel)
-	errs := make(chan string)
+	channelSize := query.Count - 1
+	reader := make(ReaderChannel, channelSize)
+	writter := make(WriterChannel, channelSize)
+	result := make(ErrorChannel, channelSize)
+	quit := make(chan bool)
 
 	go func() {
-		searchS3(ctx, query.S3Params, searcher, writter, errs)
+		searchS3(ctx, query.S3Params, reader, writter, result)
 	}()
 	go func() {
-		writeResult(ctx, writter, errs)
+		writeResult(ctx, writter, result, quit)
 	}()
 
 	for i := int64(0); i <= query.Pages; i++ {
@@ -140,7 +161,7 @@ func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 					return
 				}
 			}()
-			err = getPage(ctx, &query, reader, errs)
+			err = getPage(ctx, &query, reader)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -148,104 +169,113 @@ func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 	}
 
 	results := 0
-loop:
-	for {
-		select {
-		case e, open := <-errs:
-			if !open {
-				break loop
-			}
-			err = fmt.Errorf(e)
-			break loop
-		case r, open := <-reader:
-			if !open {
-				break loop
-			}
-			results++
-			searcher <- r
+	for e := range result {
+		results++
+		if e != nil {
+			err = e
+			break
+		}
 
-			if results >= int(query.Count) {
-				break loop
-			}
+		if results > int(channelSize) {
+			break
 		}
 	}
 
+	quit <- false
+	<-quit
+
 	close(reader)
 	close(writter)
-	close(searcher)
-	close(errs)
+	close(result)
+	close(quit)
 
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return nil
+	return err
 }
 
 func searchS3(
 	ctx context.Context,
 	s3params *S3ConnParams,
-	s SearcherChannel,
+	s ReaderChannel,
 	w WriterChannel,
-	errs chan string,
+	errs ErrorChannel,
 ) {
 	s3, err := NewS3Connect(ctx, s3params)
 	if err != nil {
-		log.Fatal(err)
+		errs <- err
 	}
 
-	for {
-		select {
-		case r, open := <-s:
-			if !open {
-				return
-			}
-
-			exist, err := s3.ObjectExist(ctx, r.Data.ID)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			if !exist {
-				w <- r
-			}
+	for r := range s {
+		r.Data.Exist, err = s3.ObjectExist(ctx, r.Data.ID)
+		if err != nil {
+			errs <- err
+			break
 		}
+
+		w <- r
 	}
 }
 
-func writeResult(ctx context.Context, writer WriterChannel, errs chan string) {
+func writeResult(ctx context.Context, writer WriterChannel, errs ErrorChannel, quit chan bool) {
+	missing := 0
+	total := 0
+	buf := new(bytes.Buffer)
+	config := ctx.Value(ctxConfig).(Config)
+
+	fmt.Fprintf(buf, "{")
+	fmt.Fprintf(buf, "\"elements\": [")
+
+writeLoop:
 	for {
 		select {
-		case w, open := <-writer:
-			if !open {
-				return
+		case w := <-writer:
+			total++
+			if w.Data.Exist && !config.PrintAll {
+				errs <- nil
+				continue
+			}
+
+			if !w.Data.Exist {
+				missing++
 			}
 
 			data, err := json.Marshal(w.Data)
 			if err != nil {
-				log.Fatal(err)
+				errs <- err
+				continue
 			}
 
-			fmt.Fprintf(os.Stdout, "%s \n", data)
+			fmt.Fprintf(buf, "%s,", data)
+			errs <- nil
+		case <-quit:
+			break writeLoop
 		}
 	}
+
+	buf.Truncate(len(buf.Bytes()) - 1)
+	fmt.Fprintf(buf, "],")
+	fmt.Fprintf(buf, "\"total\": %d,", total)
+	fmt.Fprintf(buf, "\"missing\": %d", missing)
+	fmt.Fprintf(buf, "}")
+
+	os.Stdout.Write(buf.Bytes())
+	quit <- true
 }
 
-func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel, errs chan string) error {
+func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel) error {
 	options := &options.FindOptions{}
 	options.SetLimit(query.Limit)
 	options.SetSkip(query.Page * query.Limit)
 
 	cursor, err := query.Col.Find(ctx, query.Filter, options)
 	if err != nil {
-		log.Fatal(err)
+		r <- ObjectResult{Err: err}
 	}
 
 	for cursor.Next(ctx) {
 		result := ObjectResult{}
 		object := ObjectData{}
 		if err = cursor.Decode(&object); err != nil {
-			log.Fatal(err)
+			r <- ObjectResult{Err: err}
 		}
 		result.Data = object
 		r <- result

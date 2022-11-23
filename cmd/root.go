@@ -36,7 +36,7 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.Flags().StringP("access_key", "k", "", "s3 ACCESS_KEY")
+	rootCmd.Flags().StringP("key", "k", "", "s3 ACCESS_KEY")
 	rootCmd.Flags().StringP("secret", "s", "", "s3 SECRET")
 	rootCmd.Flags().StringP("region", "r", "", "s3 REGION")
 	rootCmd.Flags().StringP("bucket", "b", "", "s3 BUCKET")
@@ -44,8 +44,9 @@ func init() {
 	rootCmd.Flags().StringP("database", "d", "", "database url")
 	rootCmd.Flags().StringP("collection", "c", "", "database collection")
 	rootCmd.Flags().StringP("connection", "m", "", "database connection")
+	rootCmd.Flags().BoolP("printall", "a", false, "Print all values in the database")
 
-	viper.BindPFlag("access_key", rootCmd.PersistentFlags().Lookup("access_key"))
+	viper.BindPFlag("key", rootCmd.PersistentFlags().Lookup("key"))
 	viper.BindPFlag("secret", rootCmd.PersistentFlags().Lookup("secret"))
 	viper.BindPFlag("region", rootCmd.PersistentFlags().Lookup("region"))
 	viper.BindPFlag("bucket", rootCmd.PersistentFlags().Lookup("bucket"))
@@ -53,6 +54,7 @@ func init() {
 	viper.BindPFlag("database", rootCmd.PersistentFlags().Lookup("database"))
 	viper.BindPFlag("collection", rootCmd.PersistentFlags().Lookup("collection"))
 	viper.BindPFlag("connection", rootCmd.PersistentFlags().Lookup("connection"))
+	viper.BindPFlag("printall", rootCmd.PersistentFlags().Lookup("printall"))
 }
 
 func initConfig() {
