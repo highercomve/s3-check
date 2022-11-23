@@ -6,6 +6,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path"
 
 	"github.com/highercomve/s3-check/lib"
 	"github.com/spf13/cobra"
@@ -36,25 +37,18 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.cobra.yaml)")
 	rootCmd.Flags().StringP("key", "k", "", "s3 ACCESS_KEY")
 	rootCmd.Flags().StringP("secret", "s", "", "s3 SECRET")
 	rootCmd.Flags().StringP("region", "r", "", "s3 REGION")
 	rootCmd.Flags().StringP("bucket", "b", "", "s3 BUCKET")
 	rootCmd.Flags().StringP("endpoint", "e", "", "s3 ENDPOINT")
-	rootCmd.Flags().StringP("database", "d", "", "database url")
+	rootCmd.Flags().StringP("database", "d", "", "database name")
 	rootCmd.Flags().StringP("collection", "c", "", "database collection")
-	rootCmd.Flags().StringP("connection", "m", "", "database connection")
+	rootCmd.Flags().StringP("connection", "m", "", "database connection url")
 	rootCmd.Flags().BoolP("printall", "a", false, "Print all values in the database")
 
-	viper.BindPFlag("key", rootCmd.PersistentFlags().Lookup("key"))
-	viper.BindPFlag("secret", rootCmd.PersistentFlags().Lookup("secret"))
-	viper.BindPFlag("region", rootCmd.PersistentFlags().Lookup("region"))
-	viper.BindPFlag("bucket", rootCmd.PersistentFlags().Lookup("bucket"))
-	viper.BindPFlag("endpoint", rootCmd.PersistentFlags().Lookup("endpoint"))
-	viper.BindPFlag("database", rootCmd.PersistentFlags().Lookup("database"))
-	viper.BindPFlag("collection", rootCmd.PersistentFlags().Lookup("collection"))
-	viper.BindPFlag("connection", rootCmd.PersistentFlags().Lookup("connection"))
-	viper.BindPFlag("printall", rootCmd.PersistentFlags().Lookup("printall"))
+	viper.BindPFlags(rootCmd.Flags())
 }
 
 func initConfig() {
@@ -66,15 +60,23 @@ func initConfig() {
 		home, err := os.UserHomeDir()
 		cobra.CheckErr(err)
 
-		// Search config in home directory with name ".cobra" (without extension).
+		p, err := os.Executable()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		cobra.CheckErr(err)
+
+		// Search config in home directory with name ".config"
 		viper.AddConfigPath(home)
+		viper.AddConfigPath(path.Dir(p))
 		viper.SetConfigType("yaml")
-		viper.SetConfigName(".cobra")
+		viper.SetConfigName(".config")
 	}
 
 	viper.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("Using config file:", viper.ConfigFileUsed())
+	if err := viper.ReadInConfig(); err != nil {
+		cobra.CheckErr(err)
 	}
 }

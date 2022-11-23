@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -53,43 +54,15 @@ const (
 )
 
 func CheckStorage(cmd *cobra.Command, args []string) (err error) {
-	var key string
-	var secret string
-	var region string
-	var bucket string
-	var endpoint string
-	var connection string
-	var database string
-	var collection string
-	var printall bool
-
-	if key, err = cmd.Flags().GetString("key"); err != nil {
-		return err
-	}
-	if secret, err = cmd.Flags().GetString("secret"); err != nil {
-		return err
-	}
-	if region, err = cmd.Flags().GetString("region"); err != nil {
-		return err
-	}
-	if bucket, err = cmd.Flags().GetString("bucket"); err != nil {
-		return err
-	}
-	if endpoint, err = cmd.Flags().GetString("endpoint"); err != nil {
-		return err
-	}
-	if database, err = cmd.Flags().GetString("database"); err != nil {
-		return err
-	}
-	if collection, err = cmd.Flags().GetString("collection"); err != nil {
-		return err
-	}
-	if connection, err = cmd.Flags().GetString("connection"); err != nil {
-		return err
-	}
-	if printall, err = cmd.Flags().GetBool("printall"); err != nil {
-		return err
-	}
+	key := viper.GetString("key")
+	secret := viper.GetString("secret")
+	region := viper.GetString("region")
+	bucket := viper.GetString("bucket")
+	endpoint := viper.GetString("endpoint")
+	database := viper.GetString("database")
+	collection := viper.GetString("collection")
+	connection := viper.GetString("connection")
+	printall := viper.GetBool("printall")
 
 	parent := context.WithValue(
 		context.Background(),
@@ -205,13 +178,15 @@ func searchS3(
 	}
 
 	for r := range s {
-		r.Data.Exist, err = s3.ObjectExist(ctx, r.Data.ID)
-		if err != nil {
-			errs <- err
-			break
-		}
+		go func(r ObjectResult) {
+			r.Data.Exist, err = s3.ObjectExist(ctx, r.Data.ID)
+			if err != nil {
+				errs <- err
+				return
+			}
 
-		w <- r
+			w <- r
+		}(r)
 	}
 }
 
