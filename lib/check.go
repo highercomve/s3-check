@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"runtime/pprof"
@@ -44,6 +45,7 @@ type ObjectResult struct {
 
 type Config struct {
 	PrintAll bool
+	Stream   bool
 }
 
 type ReaderChannel chan ObjectResult
@@ -66,6 +68,7 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	printall := viper.GetBool("printall")
 	limit := viper.GetInt64("limit")
 	cpuprofile := viper.GetString("cpuprofile")
+	stream := viper.GetBool("stream")
 
 	if cpuprofile != "" {
 		f, err := os.Create(cpuprofile)
@@ -76,10 +79,11 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 		defer pprof.StopCPUProfile()
 	}
 
-	parent := context.WithValue(
-		context.Background(),
-		ctxConfig,
-		Config{PrintAll: printall})
+	config := Config{
+		PrintAll: printall,
+		Stream:   stream,
+	}
+	parent := context.WithValue(context.Background(), ctxConfig, config)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
@@ -127,7 +131,7 @@ func getMissingObjects(ctx context.Context, query *ObjectsQuery) (err error) {
 	quit := make(chan bool)
 
 	go searchS3(ctx, query.S3Params, reader, writter, result)
-	go writeResult(ctx, writter, result, quit)
+	go writeResult(ctx, channelSize, writter, result, quit)
 
 	for i := int64(0); i <= query.Pages; i++ {
 		query := ObjectQuery{
@@ -199,16 +203,28 @@ func searchS3(
 
 func writeResult(
 	ctx context.Context,
+	size int64,
 	writer WriterChannel,
 	errs ErrorChannel,
 	quit chan bool,
 ) {
 	missing := 0
 	total := 0
-	buf := new(bytes.Buffer)
 	config := ctx.Value(ctxConfig).(Config)
 
-	fmt.Fprintf(buf, "{\"elements\": [")
+	spacer := ""
+	endline := ""
+	var output io.Writer
+	if !config.Stream {
+		output = new(bytes.Buffer)
+	} else {
+		spacer = "    "
+		endline = "\n"
+		output = os.Stdout
+	}
+
+	fmt.Fprintf(output, "{%s", endline)
+	fmt.Fprintf(output, "%s\"elements\": [%s", spacer, endline)
 
 writeLoop:
 	for {
@@ -230,22 +246,27 @@ writeLoop:
 				continue
 			}
 
-			fmt.Fprintf(buf, "%s,", data)
+			separator := ","
+			if int64(total) >= size {
+				separator = ""
+			}
+			fmt.Fprintf(output, "%s%s%s%s", spacer+spacer, data, separator, endline)
 			errs <- nil
 		case <-quit:
 			break writeLoop
 		}
 	}
 
-	buf.Truncate(len(buf.Bytes()) - 1)
-	fmt.Fprintf(buf, "],")
-	fmt.Fprintf(buf, "\"total\": %d,", total)
-	fmt.Fprintf(buf, "\"missing\": %d", missing)
-	fmt.Fprintf(buf, "}")
+	fmt.Fprintf(output, "%s],%s", spacer, endline)
+	fmt.Fprintf(output, "%s\"total\": %d,%s", spacer, total, endline)
+	fmt.Fprintf(output, "%s\"missing\": %d%s", spacer, missing, endline)
+	fmt.Fprintf(output, "}")
 
-	_, err := os.Stdout.Write(buf.Bytes())
-	if err != nil {
-		log.Fatal(err)
+	if !config.Stream {
+		_, err := os.Stdout.Write(output.(*bytes.Buffer).Bytes())
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 	quit <- true
 }
