@@ -253,7 +253,7 @@ writeLoop:
 			}
 
 			separator := ","
-			if total >= int(size)-1 {
+			if total >= int(size) {
 				separator = ""
 			}
 
