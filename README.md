@@ -1,5 +1,5 @@
 S3 Checker
-===========|
+===================
 
 Check object in a s3 storage
 
