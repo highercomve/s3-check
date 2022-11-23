@@ -19,7 +19,7 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "storage-checker",
+	Use:   "s3-check",
 	Short: "Check object in a s3 storage",
 	Long:  "Check object in a s3 storage",
 	RunE:  lib.CheckStorage,
