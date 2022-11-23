@@ -192,7 +192,7 @@ func searchS3(
 		go func(response ObjectResult) {
 			defer func() {
 				if r := recover(); r != nil {
-					errs <- err
+					return
 				}
 			}()
 
@@ -239,7 +239,7 @@ writeLoop:
 			total++
 			if result.Data.Exist && !config.PrintAll {
 				results <- nil
-				continue
+				continue writeLoop
 			}
 
 			if !result.Data.Exist {
@@ -249,7 +249,7 @@ writeLoop:
 			data, err := json.Marshal(result.Data)
 			if err != nil {
 				results <- err
-				continue
+				continue writeLoop
 			}
 
 			separator := ","
@@ -259,7 +259,7 @@ writeLoop:
 
 			if _, err = fmt.Fprintf(output, "%s%s%s%s", spacer+spacer, data, separator, endline); err != nil {
 				results <- err
-				continue
+				continue writeLoop
 			}
 
 			results <- nil
