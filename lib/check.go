@@ -192,7 +192,7 @@ func searchS3(
 		go func(response ObjectResult) {
 			defer func() {
 				if r := recover(); r != nil {
-					return
+					errs <- err
 				}
 			}()
 
