@@ -232,7 +232,10 @@ writeLoop:
 	fmt.Fprintf(buf, "\"missing\": %d", missing)
 	fmt.Fprintf(buf, "}")
 
-	os.Stdout.Write(buf.Bytes())
+	_, err := os.Stdout.Write(buf.Bytes())
+	if err != nil {
+		log.Fatal(err)
+	}
 	quit <- true
 }
 
