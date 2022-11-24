@@ -295,7 +295,7 @@ func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel) error {
 	config := ctx.Value(ctxConfig).(Config)
 	var rateLimiter *rate.Limiter
 	if config.RateLimit > 0 {
-		rateLimiter = rate.NewLimiter(rate.Every(time.Minute), int(config.RateLimit))
+		rateLimiter = rate.NewLimiter(rate.Every(time.Second), int(config.RateLimit))
 	}
 
 	cursor, err := query.Col.Find(ctx, query.Filter, options)
