@@ -273,12 +273,12 @@ writeLoop:
 	fmt.Fprintf(output, "%s\"missing\": %d%s", spacer, missing, endline)
 	fmt.Fprintf(output, "}")
 
-	if !config.Stream {
-		_, err := os.Stdout.Write(output.(*bytes.Buffer).Bytes())
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
+	// if !config.Stream {
+	// _, err := os.Stdout.Write(output.(*bytes.Buffer).Bytes())
+	// if err != nil {
+	// log.Fatal(err)
+	// }
+	// }
 	quit <- true
 }
 
