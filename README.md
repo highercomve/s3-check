@@ -15,12 +15,15 @@ Flags:
       --cpuprofile string   CPU profiling
   -d, --database string     database name
   -e, --endpoint string     s3 ENDPOINT
+  -f, --filter string       database connection url (default "{\"sizeint\":{\"$gt\": 0}}")
   -h, --help                help for s3-check
   -k, --key string          s3 ACCESS_KEY
   -l, --limit int           Request limit (default 100)
   -a, --printall            Print all values in the database
+      --ratelimit int       rate limit per second to search for objects in s3
   -r, --region string       s3 REGION
   -s, --secret string       s3 SECRET
+  -t, --stream              Stream output instead of waiting
 ```
 
 You can run it loading a `.config.yaml` from $HOME/.config.yaml or the current path

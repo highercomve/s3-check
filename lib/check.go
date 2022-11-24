@@ -68,6 +68,7 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	cpuprofile := viper.GetString("cpuprofile")
 	stream := viper.GetBool("stream")
 	ratelimit := viper.GetInt64("ratelimit")
+	filterString := viper.GetString("filter")
 
 	if cpuprofile != "" {
 		f, err := os.Create(cpuprofile)
@@ -92,7 +93,10 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	filter := bson.M{"sizeint": bson.M{"$gt": 0}}
+	filter := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(filterString), &filter); err != nil {
+		return err
+	}
 	db := storage.GetDatabase(database)
 	col := db.Collection(collection)
 

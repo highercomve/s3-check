@@ -49,6 +49,7 @@ func init() {
 	rootCmd.Flags().StringP("database", "d", "", "database name")
 	rootCmd.Flags().StringP("collection", "c", "", "database collection")
 	rootCmd.Flags().StringP("connection", "m", "", "database connection url")
+	rootCmd.Flags().StringP("filter", "f", `{"sizeint":{"$gt": 0}}`, "database connection url")
 	rootCmd.Flags().BoolP("printall", "a", false, "Print all values in the database")
 	rootCmd.Flags().BoolP("stream", "t", false, "Stream output instead of waiting")
 
