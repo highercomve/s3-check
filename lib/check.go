@@ -33,13 +33,8 @@ type ObjectQuery struct {
 	Page int64
 }
 
-type ObjectData struct {
-	ID    string `json:"id" bson:"_id"`
-	Exist bool   `json:"exist" bson:"exist"`
-}
-
 type ObjectResult struct {
-	Data ObjectData
+	Data map[string]interface{}
 	Err  error
 }
 
@@ -196,7 +191,7 @@ func searchS3(
 				}
 			}()
 
-			response.Data.Exist, err = s3.ObjectExist(ctx, response.Data.ID)
+			response.Data["exist"], err = s3.ObjectExist(ctx, response.Data["_id"].(string))
 			if err != nil {
 				errs <- err
 				return
@@ -237,12 +232,17 @@ writeLoop:
 		select {
 		case result := <-writer:
 			total++
-			if result.Data.Exist && !config.PrintAll {
+			exist, ok := result.Data["exist"]
+			if !ok && !config.PrintAll {
+				results <- nil
+				continue writeLoop
+			}
+			if exist.(bool) && !config.PrintAll {
 				results <- nil
 				continue writeLoop
 			}
 
-			if !result.Data.Exist {
+			if !exist.(bool) {
 				missing++
 			}
 
@@ -294,7 +294,7 @@ func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel) error {
 
 	for cursor.Next(ctx) {
 		result := ObjectResult{}
-		object := ObjectData{}
+		object := map[string]interface{}{}
 		if err = cursor.Decode(&object); err != nil {
 			r <- ObjectResult{Err: err}
 		}
