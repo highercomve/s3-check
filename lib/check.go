@@ -9,12 +9,14 @@ import (
 	"log"
 	"os"
 	"runtime/pprof"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"golang.org/x/time/rate"
 )
 
 type contextConfig string
@@ -39,8 +41,9 @@ type ObjectResult struct {
 }
 
 type Config struct {
-	PrintAll bool
-	Stream   bool
+	PrintAll  bool
+	Stream    bool
+	RateLimit int64
 }
 
 type ReaderChannel chan ObjectResult
@@ -64,6 +67,7 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	limit := viper.GetInt64("limit")
 	cpuprofile := viper.GetString("cpuprofile")
 	stream := viper.GetBool("stream")
+	ratelimit := viper.GetInt64("ratelimit")
 
 	if cpuprofile != "" {
 		f, err := os.Create(cpuprofile)
@@ -75,8 +79,9 @@ func CheckStorage(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	config := Config{
-		PrintAll: printall,
-		Stream:   stream,
+		PrintAll:  printall,
+		Stream:    stream,
+		RateLimit: ratelimit,
 	}
 	parent := context.WithValue(context.Background(), ctxConfig, config)
 	ctx, cancel := context.WithCancel(parent)
@@ -287,6 +292,12 @@ func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel) error {
 	options.SetLimit(query.Limit)
 	options.SetSkip(query.Page * query.Limit)
 
+	config := ctx.Value(ctxConfig).(Config)
+	var rateLimiter *rate.Limiter
+	if config.RateLimit > 0 {
+		rateLimiter = rate.NewLimiter(rate.Every(time.Minute), int(config.RateLimit))
+	}
+
 	cursor, err := query.Col.Find(ctx, query.Filter, options)
 	if err != nil {
 		r <- ObjectResult{Err: err}
@@ -299,6 +310,13 @@ func getPage(ctx context.Context, query *ObjectQuery, r ReaderChannel) error {
 			r <- ObjectResult{Err: err}
 		}
 		result.Data = object
+
+		if rateLimiter != nil {
+			if err := rateLimiter.Wait(ctx); err != nil {
+				r <- ObjectResult{Err: err}
+			}
+		}
+
 		r <- result
 	}
 

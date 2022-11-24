@@ -39,6 +39,7 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.cobra.yaml)")
 	rootCmd.PersistentFlags().String("cpuprofile", "", "CPU profiling")
+	rootCmd.Flags().Int64("ratelimit", 0, "rate limit per minute to search for objects in s3")
 	rootCmd.Flags().Int64P("limit", "l", 100, "Request limit")
 	rootCmd.Flags().StringP("key", "k", "", "s3 ACCESS_KEY")
 	rootCmd.Flags().StringP("secret", "s", "", "s3 SECRET")
